@@ -1,4 +1,5 @@
 # Qobuz-navidrome-plugin
+中文专辑多的建议使用网易云插件： https://github.com/sky8282/Netease-navidrome-plugin
 ## Navidrome 的增强插件，基于 Qobuz 数据源，实现自动补全本地音乐库元数据 （ PDF 需 token，国内需科学网络）
 ✨ 功能特性
 * 🖼️ 自动写入专辑封面 cover.jpg
