@@ -1,0 +1,87 @@
+{
+  "$schema": "https://raw.githubusercontent.com/navidrome/navidrome/refs/heads/master/plugins/manifest-schema.json",
+  "name": "Qobuz Music Plugin",
+  "author": "sky8282",
+  "version": "0.0.1",
+  "description": "获取 Qobuz 歌手头像、专辑封面、PDF、相似艺人, 同时支持通过自定义 API 请求歌词，支持写入本地",
+  "website": "https://github.com/sky8282/Qobuz-navidrome-plugin",
+  "permissions": {
+    "users": { "reason": "开启写入本地权限" },
+    "http": {
+      "reason": "向 Qobuz 请求元数据 与向 自定义 API 请求歌词",
+      "requiredHosts": [
+        "www.qobuz.com",
+        "static.qobuz.com",
+        "api.qobuz.com",
+        "play.qobuz.com",
+        "music.163.com",
+        "interface3.music.163.com",
+        "163.kimu.edu.kg"
+      ]
+    },
+    "library": { "reason": "定位物理文件以写入标签", "filesystem": true },
+    "subsonicapi": { "reason": "通过内部接口提取真实路径" },
+    "kvstore": { "reason": "缓存", "maxSize": "1048576" }
+  },
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "qobuz_app_id": { "type": "string", "title": "Qobuz App ID", "default": "798273057" },
+        "qobuz_app_secret": { "type": "string", "title": "Qobuz App Secret", "default": "abb21364945c0583309667d13ca3d93a" },
+        "qobuz_region": {
+          "type": "string",
+          "title": "元数据语言主区域",
+          "default": "fr",
+          "oneOf": [
+            { "const": "fr", "title": "🇫🇷 法国 (FR)" },
+            { "const": "us", "title": "🇺🇸 美国 (US)" },
+            { "const": "jp", "title": "🇯🇵 日本 (JP)" },
+            { "const": "gb", "title": "🇬🇧 英国 (GB)" },
+            { "const": "de", "title": "🇩🇪 德国 (DE)" },
+            { "const": "es", "title": "🇪🇸 西班牙 (ES)" },
+            { "const": "it", "title": "🇮🇹 意大利 (IT)" },
+            { "const": "nl", "title": "🇳🇱 荷兰 (NL)" },
+            { "const": "ca", "title": "🇨🇦 加拿大 (CA)" },
+            { "const": "au", "title": "🇦🇺 澳大利亚 (AU)" },
+            { "const": "ch", "title": "🇨🇭 瑞士 (CH)" },
+            { "const": "be", "title": "🇧🇪 比利时 (BE)" },
+            { "const": "ie", "title": "🇮🇪 爱尔兰 (IE)" }
+          ]
+        },
+        "qobuz_token_main": { "type": "string", "title": "Qobuz 元数据语言主区域 Token", "default": "Hdtb8N_rniusekQEfZOxWQL7juYA11WIFmdmDLLpJR2J87Bq8Ny_1ZjFdVUhZ8RQCM-7CEzlj72XASCUM-WX_g" },
+        "qobuz_token_fr": { "type": "string", "title": "Qobuz 副 Token (不支持 PDF 的区域可通过 🇫🇷 法国 (FR) 获取 PDF)", "default": "" },
+        "enable_debug_log": { "type": "boolean", "title": "开启 Debug 日志", "default": true },
+        "enable_write_metadata": { "type": "boolean", "title": "增量写入本地音轨元数据", "default": true },
+        "enable_write_pdf": { "type": "boolean", "title": "写入本地 PDF (.pdf)", "default": true },
+        "enable_write_cover_image": { "type": "boolean", "title": "写入本地专辑封面 (cover.jpg)", "default": true },
+        "enable_write_artist_image": { "type": "boolean", "title": "写入本地歌手头像 (artist.jpg)", "default": true },
+        "enable_write_lyrics": { "type": "boolean", "title": "写入本地歌词 (.lrc)", "default": true },
+        "cache_days": { "type": "integer", "title": "缓存天数 (默认 180 天)", "default": 180 },
+        "lyrics_api_url": {
+          "type": "string",
+          "title": "歌词 API 请求格式请参考：https://github.com/sky8282/Netease-api ",
+          "default": ""
+        }
+      }
+    },
+    "uiSchema": {
+      "type": "VerticalLayout",
+      "elements": [
+        { "type": "Control", "scope": "#/properties/qobuz_app_id" },
+        { "type": "Control", "scope": "#/properties/qobuz_app_secret" },
+        { "type": "Control", "scope": "#/properties/qobuz_region" },
+        { "type": "Control", "scope": "#/properties/qobuz_token_main" },
+        { "type": "Control", "scope": "#/properties/qobuz_token_fr" },
+        { "type": "Control", "scope": "#/properties/enable_debug_log" },
+        { "type": "Control", "scope": "#/properties/enable_write_metadata" },
+        { "type": "Control", "scope": "#/properties/enable_write_pdf" },
+        { "type": "Control", "scope": "#/properties/enable_write_cover_image" },
+        { "type": "Control", "scope": "#/properties/enable_write_artist_image" },
+        { "type": "Control", "scope": "#/properties/enable_write_lyrics" },
+        { "type": "Control", "scope": "#/properties/lyrics_api_url" },
+        { "type": "Control", "scope": "#/properties/cache_days" }
+      ]
+    }
+  }
+}
