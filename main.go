@@ -1,27 +1,26 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
-	"net/url"
 	"os"
-	"path/filepath"
+	"fmt"
+	"time"
+	"errors"
 	"regexp"
 	"strings"
-	"time"
+	"net/url"
+	"encoding/json"
+	"path/filepath"
 
-	"github.com/Sorrow446/go-mp4tag"
 	"github.com/bogem/id3v2/v2"
-	"github.com/go-flac/flacpicture"
-	"github.com/go-flac/flacvorbis"
 	"github.com/go-flac/go-flac"
-
+	"github.com/go-flac/flacvorbis"
+	"github.com/Sorrow446/go-mp4tag"
+	"github.com/go-flac/flacpicture"
+	"github.com/navidrome/navidrome/plugins/pdk/go/pdk"
 	"github.com/navidrome/navidrome/plugins/pdk/go/host"
 	"github.com/navidrome/navidrome/plugins/pdk/go/lyrics"
 	"github.com/navidrome/navidrome/plugins/pdk/go/metadata"
-	"github.com/navidrome/navidrome/plugins/pdk/go/pdk"
 	"github.com/navidrome/navidrome/plugins/pdk/go/scrobbler"
 )
 
@@ -48,22 +47,7 @@ func init() {
 	lyrics.Register(agent)
 	scrobbler.Register(agent)
 
-	//pdk.Log(pdk.LogInfo, "===============================================")
-	pdk.Log(pdk.LogInfo, "🚀 模式: 动态鉴权 + Qobuz 元数据 + 歌词")
-	//pdk.Log(pdk.LogInfo, "===============================================")
-}
-
-func updateValidUser(u string) {
-	if u != "" {
-		host.KVStoreSet("last_valid_nav_user", []byte(u))
-	}
-}
-
-func getNavUser() string {
-	if b, ok, _ := host.KVStoreGet("last_valid_nav_user"); ok && len(b) > 0 {
-		return string(b)
-	}
-	return "admin"
+	pdk.Log(pdk.LogInfo, "🚀 模式: 动态鉴权 + Qobuz 元数据 (JSON 泛型容错版) + 歌词")
 }
 
 func getConfigString(key, defaultVal string) string {
@@ -97,13 +81,25 @@ func appendRegion(urlStr string, useFrToken bool) string {
 }
 
 func buildQobuzHeaders(useFrToken bool) map[string]string {
-	token := getMainToken()
-	if useFrToken && getFrToken() != "" { token = getFrToken() }
-	return map[string]string{
-		"X-App-Id":          getAppID(),
-		"X-User-Auth-Token": token,
-		"User-Agent":        defaultUserAgent,
+	var token string
+	if useFrToken {
+		token = getFrToken()
+	} else {
+		token = getMainToken()
 	}
+	
+	token = strings.TrimSpace(token)
+	
+	headers := map[string]string{
+		"X-App-Id":        getAppID(),
+		"User-Agent":      defaultUserAgent,
+		"Accept":          "application/json",
+		"Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6", 
+	}
+	if token != "" {
+		headers["X-User-Auth-Token"] = token
+	}
+	return headers
 }
 
 type SongData struct {
@@ -184,15 +180,17 @@ func cleanArtistName(artist string) string {
 func compactText(text string) string {
 	if text == "" { return "" }
 	text = strings.ReplaceAll(text, "</p>", "\n")
+	text = strings.ReplaceAll(text, "<p>", "")
 	text = strings.ReplaceAll(text, "<br>", "\n")
 	text = strings.ReplaceAll(text, "<br/>", "\n")
 	text = strings.ReplaceAll(text, "<br />", "\n")
-	reHtml := regexp.MustCompile(`(?i)<.*?>`)
+	reHtml := regexp.MustCompile(`(?i)<[^>]*?>`)
 	text = reHtml.ReplaceAllString(text, "")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
-	reSpace := regexp.MustCompile(`\n\s*\n+`)
-	return strings.TrimSpace(reSpace.ReplaceAllString(text, "\n"))
+	reSpace := regexp.MustCompile(`\n{3,}`)
+	text = reSpace.ReplaceAllString(text, "\n\n")
+	return strings.TrimSpace(text)
 }
 
 func removeAccents(s string) string {
@@ -217,13 +215,19 @@ func cleanSearchTerm(text string) string {
 }
 
 func fuzzyMatch(s1, s2 string) bool {
-	re := regexp.MustCompile(`[^a-z0-9]+`)
-	n1 := re.ReplaceAllString(removeAccents(cleanSearchTerm(s1)), "")
-	n2 := re.ReplaceAllString(removeAccents(cleanSearchTerm(s2)), "")
+	re := regexp.MustCompile(`[^\p{L}\p{N}]+`)
+	n1 := re.ReplaceAllString(removeAccents(strings.ToLower(s1)), "")
+	n2 := re.ReplaceAllString(removeAccents(strings.ToLower(s2)), "")
 	if n1 == "" || n2 == "" { return false }
 	if n1 == n2 { return true }
 	if len(n1) > 3 && len(n2) > 3 {
-		return strings.Contains(n1, n2) || strings.Contains(n2, n1)
+		if strings.Contains(n1, n2) || strings.Contains(n2, n1) { return true }
+	}
+	reAscii := regexp.MustCompile(`[^\x00-\x7F]+`)
+	a1 := reAscii.ReplaceAllString(n1, "")
+	a2 := reAscii.ReplaceAllString(n2, "")
+	if len(a1) > 3 && len(a2) > 3 {
+		if strings.Contains(a1, a2) || strings.Contains(a2, a1) { return true }
 	}
 	return false
 }
@@ -344,7 +348,6 @@ func fetchAndWriteLocalLyrics(title, artist, absolutePath string) string {
 		safeTitle := url.QueryEscape(title)
 		safeArtist := url.QueryEscape(artist)
 		apiURL := fmt.Sprintf("%s/api/lyric?title=%s&artist=%s", customAPI, safeTitle, safeArtist)
-		pdk.Log(pdk.LogInfo, fmt.Sprintf("[Lyrics] 正在使用自定义 API 请求歌词: %s", apiURL))
 		
 		resp, err := host.HTTPSend(host.HTTPRequest{
 			Method: "GET",
@@ -367,10 +370,6 @@ func fetchAndWriteLocalLyrics(title, artist, absolutePath string) string {
 				lrcText = cleanLyric(extractLyric(customResp.Lrc))
 				tlyricText = cleanLyric(extractLyric(customResp.Tlyric))
 			}
-		} else {
-			status := int32(0)
-			if resp != nil { status = resp.StatusCode }
-			pdk.Log(pdk.LogError, fmt.Sprintf("[Lyrics] 自定义 API 请求失败, 状态码: %d, Err: %v", status, err))
 		}
 	}
 	
@@ -416,16 +415,24 @@ func fetchQobuzArtistInfo(artistName string) (string, string) {
 	sUrl := fmt.Sprintf("%s/catalog/search?query=%s&type=artists&limit=1", qobuzBaseURL, url.QueryEscape(searchName))
 	sUrl = appendRegion(sUrl, false)
 	sResp, err := host.HTTPSend(host.HTTPRequest{Method: "GET", URL: sUrl, Headers: buildQobuzHeaders(false)})
-	if err != nil || sResp.StatusCode != 200 { return "", "" }
+	
+	if err != nil {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] 获取歌手网络请求失败: %v", err))
+		return "", ""
+	}
+	if sResp.StatusCode != 200 {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] 获取歌手失败 HTTP %d: %s", sResp.StatusCode, string(sResp.Body)))
+		return "", ""
+	}
 
-	var sr struct { Artists struct { Items []struct { ID int `json:"id"` } `json:"items"` } `json:"artists"` }
-	json.Unmarshal(sResp.Body, &sr)
+	var sr struct { Artists struct { Items []struct { ID interface{} `json:"id"` } `json:"items"` } `json:"artists"` }
+	if err := json.Unmarshal(sResp.Body, &sr); err != nil { return "", "" }
 	if len(sr.Artists.Items) == 0 { return "", "" }
 
-	targetArtistID := sr.Artists.Items[0].ID
-	if targetArtistID == 0 { return "", "" }
+	targetArtistID := fmt.Sprintf("%v", sr.Artists.Items[0].ID)
+	if targetArtistID == "0" || targetArtistID == "<nil>" || targetArtistID == "" { return "", "" }
 
-	aUrl := fmt.Sprintf("%s/artist/get?artist_id=%d", qobuzBaseURL, targetArtistID)
+	aUrl := fmt.Sprintf("%s/artist/get?artist_id=%s", qobuzBaseURL, targetArtistID)
 	aUrl = appendRegion(aUrl, false)
 	aResp, err := host.HTTPSend(host.HTTPRequest{Method: "GET", URL: aUrl, Headers: buildQobuzHeaders(false)})
 	if err != nil || aResp.StatusCode != 200 { return "", "" }
@@ -480,90 +487,196 @@ func fetchCompleteAlbumData(albumName, artistName string) (AlbumData, error) {
 	searchURL := fmt.Sprintf("%s/catalog/search?query=%s&type=albums&limit=1", qobuzBaseURL, url.QueryEscape(query))
 	searchURL = appendRegion(searchURL, false)
 	respSearch, err := host.HTTPSend(host.HTTPRequest{Method: "GET", URL: searchURL, Headers: buildQobuzHeaders(false)})
-	if err != nil || respSearch.StatusCode != 200 { return data, fmt.Errorf("search failed") }
+	
+	if err != nil {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] Search HTTP Request Error: %v", err))
+		return data, fmt.Errorf("search failed") 
+	}
+	if respSearch.StatusCode != 200 {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] Search HTTP %d: %s", respSearch.StatusCode, string(respSearch.Body)))
+		return data, fmt.Errorf("search failed") 
+	}
 
-	var sr struct { Albums struct { Items []struct { ID string `json:"id"` } `json:"items"` } `json:"albums"` }
-	json.Unmarshal(respSearch.Body, &sr)
-	if len(sr.Albums.Items) == 0 { return data, fmt.Errorf("album not found") }
+	var sr struct { Albums struct { Items []struct { ID interface{} `json:"id"` } `json:"items"` } `json:"albums"` }
+	if err := json.Unmarshal(respSearch.Body, &sr); err != nil {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] Search JSON Parse Error: %v", err))
+		return data, fmt.Errorf("parse failed")
+	}
+	if len(sr.Albums.Items) == 0 { 
+		pdk.Log(pdk.LogInfo, fmt.Sprintf("[Qobuz API] Search returned 0 items for: %s", query))
+		return data, fmt.Errorf("album not found") 
+	}
 
-	albumID := strings.ReplaceAll(sr.Albums.Items[0].ID, "qobuz_", "")
+	albumID := strings.ReplaceAll(fmt.Sprintf("%v", sr.Albums.Items[0].ID), "qobuz_", "")
 	pdk.Log(pdk.LogInfo, fmt.Sprintf("[Qobuz API] ✅ 匹配到专辑 ID: %s，正在请求详细数据...", albumID))
 
 	data, err = getAlbumDetailByID(albumID, data, artistName, false)
 	if err != nil { return data, err }
 
-	if data.PDFLink == "" && getFrToken() != "" {
-		pdk.Log(pdk.LogInfo, "[Qobuz API] ⚠️ 主区域未获取到 PDF，静默跨区尝试 🇫🇷 法国区 补全...")
+	needsFallback := false
+	if data.PDFLink == "" || data.Description == "" {
+		needsFallback = true
+	}
+
+	if needsFallback {
+		pdk.Log(pdk.LogInfo, "[Qobuz API] ⚠️ 主区域数据不完整 (缺失 PDF 或 专辑介绍)，触发强力匿名/跨区补全...")
 		frData, err := getAlbumDetailByID(albumID, AlbumData{}, artistName, true)
-		if err == nil && frData.PDFLink != "" {
-			data.PDFLink = frData.PDFLink
-			data.PDFName = frData.PDFName
-			pdk.Log(pdk.LogInfo, "[Qobuz API] 成功从 🇫🇷 法国区 补全 PDF")
+		if err == nil {
+			if data.PDFLink == "" && frData.PDFLink != "" {
+				data.PDFLink = frData.PDFLink
+				data.PDFName = frData.PDFName
+				pdk.Log(pdk.LogInfo, "[Qobuz API] ✅ 成功从回退渠道补全 PDF 链接")
+			}
+			if data.Description == "" && frData.Description != "" {
+				data.Description = frData.Description
+				pdk.Log(pdk.LogInfo, "[Qobuz API] ✅ 成功从回退渠道补全专辑介绍")
+			}
 		}
 	}
+
+	if data.PDFLink != "" {
+		pdfTag := fmt.Sprintf("PDF:%s", data.PDFLink)
+		if data.Description != "" {
+			data.Description = pdfTag + "\n" + data.Description
+		} else {
+			data.Description = pdfTag
+		}
+		pdk.Log(pdk.LogInfo, "[DEBUG Qobuz] 已成功将 PDF 标签合并入 Description")
+	}
+
 	return data, nil
 }
 
 func getAlbumDetailByID(albumID string, data AlbumData, fallbackArtist string, useFrToken bool) (AlbumData, error) {
-	detailURL := fmt.Sprintf("%s/album/get?album_id=%s&extra=focus", qobuzBaseURL, albumID)
+	detailURL := fmt.Sprintf("%s/album/get?album_id=%s&offset=0&limit=50&extra=track_ids,albumsFromSameArtist", qobuzBaseURL, albumID)
 	detailURL = appendRegion(detailURL, useFrToken)
+	
+	regionLog := " 🌐 主区域"
+	if useFrToken {
+		regionLog = "🇫🇷 回退区"
+	}
+	pdk.Log(pdk.LogInfo, fmt.Sprintf("[DEBUG Qobuz] 开始请求 %s 专辑详情 URL: %s", regionLog, detailURL))
+
 	respAlbum, err := host.HTTPSend(host.HTTPRequest{Method: "GET", URL: detailURL, Headers: buildQobuzHeaders(useFrToken)})
-	if err != nil || respAlbum.StatusCode != 200 { return data, fmt.Errorf("detail request failed") }
+	
+	if err != nil {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] %s Detail HTTP Request Error: %v", regionLog, err))
+		return data, fmt.Errorf("detail request failed") 
+	}
+	if respAlbum.StatusCode != 200 {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] %s Detail HTTP %d: %s", regionLog, respAlbum.StatusCode, string(respAlbum.Body)))
+		return data, fmt.Errorf("detail request failed") 
+	}
+
+	var rawMap map[string]interface{}
+	if err := json.Unmarshal(respAlbum.Body, &rawMap); err != nil {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] %s 基础泛型解析失败: %v", regionLog, err))
+	} else {
+		var extractedDesc string
+		
+		if d, ok := rawMap["description"].(string); ok && strings.TrimSpace(d) != "" {
+			extractedDesc = strings.TrimSpace(d)
+			pdk.Log(pdk.LogInfo, fmt.Sprintf("[DEBUG %s] 成功从外层 description 提取专辑介绍", regionLog))
+		} else {
+			if facts, ok := rawMap["product_sales_facts"].(map[string]interface{}); ok {
+				if ed, ok := facts["editorial"].(map[string]interface{}); ok {
+					if d, ok := ed["description"].(string); ok && strings.TrimSpace(d) != "" {
+						extractedDesc = strings.TrimSpace(d)
+						pdk.Log(pdk.LogInfo, fmt.Sprintf("[DEBUG %s] 成功从 product_sales_facts 提取专辑介绍", regionLog))
+					}
+				}
+			}
+			
+			if extractedDesc == "" {
+				if factors, ok := rawMap["product_sales_factors"].(map[string]interface{}); ok {
+					if ed, ok := factors["editorial"].(map[string]interface{}); ok {
+						if d, ok := ed["description"].(string); ok && strings.TrimSpace(d) != "" {
+							extractedDesc = strings.TrimSpace(d)
+							pdk.Log(pdk.LogInfo, fmt.Sprintf("[DEBUG %s] 成功从 product_sales_factors 提取专辑介绍", regionLog))
+						}
+					}
+				}
+			}
+		}
+
+		if extractedDesc == "" {
+			if catch, ok := rawMap["catchline"].(string); ok && strings.TrimSpace(catch) != "" {
+				extractedDesc = catch
+				pdk.Log(pdk.LogInfo, fmt.Sprintf("[DEBUG %s] 成功从 catchline 提取兜底介绍", regionLog))
+			}
+		}
+
+		cleanDesc := compactText(extractedDesc)
+		if cleanDesc != "" {
+			data.Description = cleanDesc
+		}
+		
+		var pdfLink, pdfName string
+		if goodies, ok := rawMap["goodies"].([]interface{}); ok {
+			for _, item := range goodies {
+				if gMap, ok := item.(map[string]interface{}); ok {
+					gName, _ := gMap["name"].(string)
+					gUrl, _ := gMap["url"].(string)
+					gOrig, _ := gMap["original_name"].(string)
+					
+					var gFormatId int
+					if f, ok := gMap["file_format_id"].(float64); ok {
+						gFormatId = int(f)
+					}
+					
+					lowerName := strings.ToLower(gName)
+					if (gFormatId == 25 || gFormatId == 21 || strings.Contains(lowerName, "booklet") || strings.Contains(lowerName, "livret")) && gUrl != "" {
+						pdfLink = gUrl
+						pdfName = gOrig
+						pdk.Log(pdk.LogInfo, fmt.Sprintf("[DEBUG %s] 成功匹配到 PDF", regionLog))
+						break
+					}
+				}
+			}
+		}
+		
+		if pdfLink != "" {
+			data.PDFLink = pdfLink
+			data.PDFName = pdfName
+		}
+		
+		pdk.Log(pdk.LogInfo, fmt.Sprintf("[DEBUG Qobuz %s] 解析完成 -> Description长度: %d, PDF链接: %s", regionLog, len(data.Description), data.PDFLink))
+	}
 
 	var detail struct {
-		ID          string `json:"id"`
+		ID          interface{} `json:"id"`
 		Title       string `json:"title"`
-		Description string `json:"description"`
-		Catchline   string `json:"catchline"`
 		Label       struct { Name string `json:"name"` } `json:"label"`
 		ReleasedAt  int64 `json:"released_at"`
 		Genre       struct { Name string `json:"name"` } `json:"genre"`
 		Image       struct { Large string `json:"large"` } `json:"image"`
-		Artist      struct { ID int `json:"id"`; Name string `json:"name"` } `json:"artist"`
+		Artist      struct { ID interface{} `json:"id"`; Name string `json:"name"` } `json:"artist"`
 		Tracks      struct {
 			Items []struct {
-				ID          int    `json:"id"`
+				ID          interface{} `json:"id"`
 				Title       string `json:"title"`
 				Work        string `json:"work"`
 				TrackNumber int    `json:"track_number"`
 				MediaNumber int    `json:"media_number"`
 				ISRC        string `json:"isrc"`
-				Composer    struct { ID int `json:"id"`; Name string `json:"name"` } `json:"composer"`
+				Composer    struct { ID interface{} `json:"id"`; Name string `json:"name"` } `json:"composer"`
 				Performer   struct { Name string `json:"name"` } `json:"performer"`
 			} `json:"items"`
 		} `json:"tracks"`
-		Goodies []struct {
-			FileFormatID int    `json:"file_format_id"`
-			Name         string `json:"name"`
-			URL          string `json:"url"`
-			OriginalName string `json:"original_name"`
-		} `json:"goodies"`
 	}
-	json.Unmarshal(respAlbum.Body, &detail)
+	
+	if err := json.Unmarshal(respAlbum.Body, &detail); err != nil {
+		pdk.Log(pdk.LogError, fmt.Sprintf("[Qobuz API] 核心骨架解析失败: %v", err))
+		return data, fmt.Errorf("parse error")
+	}
 
 	if !useFrToken {
-		data.AlbumID = detail.ID
+		data.AlbumID = fmt.Sprintf("%v", detail.ID)
 		data.AlbumName = detail.Title
 		data.PicURL = detail.Image.Large
-		
-		desc := detail.Description
-		if desc == "" { desc = detail.Catchline }
-		data.Description = compactText(desc)
-		
 		data.Company = detail.Label.Name
 		data.PublishTime = detail.ReleasedAt * 1000
-	}
 
-	for _, g := range detail.Goodies {
-		n := strings.ToLower(g.Name)
-		if (g.FileFormatID == 25 || g.FileFormatID == 21 || strings.Contains(n, "booklet")) && g.URL != "" {
-			data.PDFLink = g.URL
-			data.PDFName = g.OriginalName
-			break
-		}
-	}
-
-	if !useFrToken {
 		targetArtistName := detail.Artist.Name
 		if targetArtistName == "" && len(detail.Tracks.Items) > 0 { targetArtistName = detail.Tracks.Items[0].Performer.Name }
 		if targetArtistName == "" { targetArtistName = fallbackArtist }
@@ -576,12 +689,15 @@ func getAlbumDetailByID(albumID string, data AlbumData, fallbackArtist string, u
 			work := t.Work
 			if work == "" { work = t.Title }
 			compName := t.Composer.Name
-			compId := t.Composer.ID
+			
+			compId := fmt.Sprintf("%v", t.Composer.ID)
 			workInfo := work
 
 			if compName != "" {
 				workInfo = fmt.Sprintf("%s (%s)", work, compName)
-				if compId != 0 { workInfo = fmt.Sprintf("%s [ID:qobuz_%d]", workInfo, compId) }
+				if compId != "0" && compId != "<nil>" && compId != "" { 
+					workInfo = fmt.Sprintf("%s [ID:qobuz_%s]", workInfo, compId) 
+				}
 			}
 
 			performer := t.Performer.Name
@@ -589,7 +705,7 @@ func getAlbumDetailByID(albumID string, data AlbumData, fallbackArtist string, u
 			if performer == "" { performer = fallbackArtist }
 
 			data.Songs = append(data.Songs, SongData{
-				ID:       fmt.Sprintf("%d", t.ID),
+				ID:       fmt.Sprintf("%v", t.ID),
 				Name:     t.Title,
 				TrackNum: t.TrackNumber,
 				DiscNum:  t.MediaNumber,
@@ -627,12 +743,12 @@ func cleanFlacFile(absPath string) error {
 	if err != nil { return err }
 	header := make([]byte, 10)
 	if _, err := file.Read(header); err != nil { file.Close(); return err }
-	if string(header[0:3]) != "ID3" { file.Close(); return fmt.Errorf("无 ID3 头部") }
+	if string(header[0:3]) != "ID3" { file.Close(); return fmt.Errorf("未检测到 ID3 头部") }
 	size := (int(header[6]) << 21) | (int(header[7]) << 14) | (int(header[8]) << 7) | int(header[9])
 	totalSize := int64(size + 10)
 	magic := make([]byte, 4)
 	if _, err := file.ReadAt(magic, totalSize); err != nil { file.Close(); return err }
-	if string(magic) != "fLaC" { file.Close(); return fmt.Errorf("未找到 fLaC 标识") }
+	if string(magic) != "fLaC" { file.Close(); return fmt.Errorf("按协议计算大小后未找到真实的 fLaC 标识，跳过修复") }
 	tempPath := absPath + ".tmp"
 	tempFile, err := os.Create(tempPath)
 	if err != nil { file.Close(); return err }
@@ -647,6 +763,12 @@ func cleanFlacFile(absPath string) error {
 func writeTags(absPath, ext string, song SongData, album AlbumData, year, comment, description, lyric string, picData []byte) bool {
 	filename := filepath.Base(absPath)
 	artistStr := strings.Join(song.Artists, "/")
+
+	defer func() {
+		if r := recover(); r != nil {
+			pdk.Log(pdk.LogError, fmt.Sprintf("[TagWriter] 🚨 致命崩溃拦截 (%s): %v", filename, r))
+		}
+	}()
 
 	switch ext {
 	case ".mp3":
@@ -829,11 +951,12 @@ func findAudioBySize(root, suffix string, size int64) (string, error) {
 	if size <= 0 { return "", fmt.Errorf("invalid size") }
 	dotSuffix := "." + suffix
 	var found string
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, dotSuffix) { return nil }
 		if info.Size() == size { found = path; return errWalkStop }
 		return nil
 	})
+	if walkErr != nil && !errors.Is(walkErr, errWalkStop) { return "", walkErr }
 	if found == "" { return "", fmt.Errorf("not found") }
 	return found, nil
 }
@@ -853,20 +976,26 @@ func resolveAbsolutePath(relPath, suffix string, size int64) (string, error) {
 
 func resolveFromRelativePath(relPath string) string {
 	if relPath == "" || filepath.IsAbs(relPath) { return relPath }
-	libraries, _ := host.LibraryGetAllLibraries()
-	for _, lib := range libraries {
-		root := lib.MountPoint
-		if root == "" { root = lib.Path }
-		if root == "" { continue }
-		fullPath := filepath.Join(root, relPath)
-		if _, err := os.Stat(fullPath); err == nil { return fullPath }
+	libraries, err := host.LibraryGetAllLibraries()
+	if err == nil {
+		for _, lib := range libraries {
+			root := lib.MountPoint
+			if root == "" { root = lib.Path }
+			if root == "" { continue }
+			fullPath := filepath.Join(root, relPath)
+			if _, err := os.Stat(fullPath); err == nil {
+				if absPath, err := filepath.Abs(fullPath); err == nil { return absPath }
+				return fullPath 
+			}
+		}
 	}
+	if absFallback, err := filepath.Abs(relPath); err == nil { return absFallback }
 	return relPath
 }
 
 func getAlbumDirAndArtistFromID(albumID string) (string, string) {
 	if albumID == "" { return "", "" }
-	jsonStr, err := host.SubsonicAPICall("getAlbum?id=" + albumID + "&u=" + getNavUser() + "&f=json&v=1.16.0")
+	jsonStr, err := host.SubsonicAPICall("getAlbum?id=" + albumID + "&u=admin&f=json&v=1.16.0")
 	if err != nil { return "", "" }
 	var resp subsonicAlbumResponse
 	json.Unmarshal([]byte(jsonStr), &resp)
@@ -889,7 +1018,7 @@ func getAlbumDirAndArtistFromID(albumID string) (string, string) {
 func findAlbumDirViaSubsonicAPI(albumName, artistName string) (string, string) {
 	if albumName == "" { return "", "" }
 	query := url.QueryEscape(albumName)
-	jsonStr, err := host.SubsonicAPICall(fmt.Sprintf("search3?query=%s&albumCount=10&u=%s&f=json&v=1.16.0", query, getNavUser()))
+	jsonStr, err := host.SubsonicAPICall(fmt.Sprintf("search3?query=%s&albumCount=10&u=admin&f=json&v=1.16.0", query))
 	if err != nil { return "", "" }
 
 	var resp struct {
@@ -916,6 +1045,7 @@ func findAlbumDirViaSubsonicAPI(albumName, artistName string) (string, string) {
 func guessAlbumPathAndArtist(albumName, artistName string) (string, string) {
 	libraries, _ := host.LibraryGetAllLibraries()
 	cleanArtist := cleanArtistName(artistName)
+	cleanAlbum := cleanSearchTerm(albumName) 
 	
 	for _, lib := range libraries {
 		root := lib.MountPoint
@@ -925,27 +1055,39 @@ func guessAlbumPathAndArtist(albumName, artistName string) (string, string) {
 		if cleanArtist != "" {
 			guess1 := filepath.Join(root, cleanArtist, albumName)
 			if stat, err := os.Stat(guess1); err == nil && stat.IsDir() { return guess1, cleanArtist }
+			
+			artistGuess := filepath.Join(root, cleanArtist)
+			if stat, err := os.Stat(artistGuess); err == nil && stat.IsDir() {
+				if subEntries, err := os.ReadDir(artistGuess); err == nil {
+					for _, sub := range subEntries {
+						if !sub.IsDir() { continue }
+						if fuzzyMatch(cleanAlbum, sub.Name()) || strings.Contains(strings.ToLower(sub.Name()), strings.ToLower(cleanAlbum)) {
+							return filepath.Join(artistGuess, sub.Name()), cleanArtist
+						}
+					}
+				}
+			}
 		}
 		
 		if entries, err := os.ReadDir(root); err == nil {
 			for _, entry := range entries {
 				if !entry.IsDir() { continue }
 				
-				isArtistFolder := cleanArtist != "" && fuzzyMatch(cleanArtist, entry.Name())
+				isArtistFolder := cleanArtist != "" && (fuzzyMatch(cleanArtist, entry.Name()) || strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(cleanArtist)))
 				
 				if isArtistFolder || cleanArtist == "" {
 					artistDir := filepath.Join(root, entry.Name())
 					if subEntries, err := os.ReadDir(artistDir); err == nil {
 						for _, sub := range subEntries {
 							if !sub.IsDir() { continue }
-							if fuzzyMatch(albumName, sub.Name()) {
+							if fuzzyMatch(cleanAlbum, sub.Name()) || strings.Contains(strings.ToLower(sub.Name()), strings.ToLower(cleanAlbum)) {
 								return filepath.Join(artistDir, sub.Name()), entry.Name()
 							}
 						}
 					}
 				} 
 				
-				if fuzzyMatch(albumName, entry.Name()) { return filepath.Join(root, entry.Name()), "" }
+				if fuzzyMatch(cleanAlbum, entry.Name()) || strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(cleanAlbum)) { return filepath.Join(root, entry.Name()), "" }
 			}
 		}
 	}
@@ -953,7 +1095,7 @@ func guessAlbumPathAndArtist(albumName, artistName string) (string, string) {
 }
 
 func getSongDetailsFromSubsonic(username, trackID string) (*subsonicSongResponse, error) {
-	if username == "" { username = getNavUser() }
+	if username == "" { username = "admin" }
 	jsonStr, err := host.SubsonicAPICall("getSong?id=" + trackID + "&u=" + username + "&f=json&v=1.16.0")
 	if err != nil { return nil, err }
 	var resp subsonicSongResponse
@@ -971,10 +1113,8 @@ func getTrackArtistAndDir(username, trackID, trackArtist, fallbackPath string) (
 
 		if aArtist := cleanArtistName(detail.SubsonicResponse.Song.AlbumArtist); aArtist != "" {
 			finalArtist = aArtist
-			pdk.Log(pdk.LogInfo, fmt.Sprintf("[Phase2] 🏷️ 找到 API AlbumArtist: %s", finalArtist))
 		} else if art := cleanArtistName(detail.SubsonicResponse.Song.Artist); art != "" {
 			finalArtist = art
-			pdk.Log(pdk.LogInfo, fmt.Sprintf("[Phase2] 🏷️ 找到 API Artist: %s", finalArtist))
 		}
 	}
 
@@ -987,7 +1127,6 @@ func getTrackArtistAndDir(username, trackID, trackArtist, fallbackPath string) (
 			guessedArtist := parts[len(parts)-3]
 			if guessedArtist != "" && !strings.Contains(guessedArtist, "Music Library") && guessedArtist != "." {
 				finalArtist = guessedArtist
-				pdk.Log(pdk.LogInfo, fmt.Sprintf("[Phase2] 🎯 标签为空，通过物理路径强行提取歌手: %s", finalArtist))
 			}
 		}
 	}
@@ -995,12 +1134,16 @@ func getTrackArtistAndDir(username, trackID, trackArtist, fallbackPath string) (
 }
 
 func fetchAndCacheAlbum(albumID, albumName, artistName, knownDir string) AlbumData {
-	finalArtist := artistName
+	finalArtist := strings.TrimSpace(artistName)
+	if finalArtist == "[Unknown Artist]" || finalArtist == "Unknown Artist" || finalArtist == "Unknown" {
+		finalArtist = ""
+	}
+	
 	albumDir := knownDir
 	
 	if albumID != "" {
 		apiDir, apiArt := getAlbumDirAndArtistFromID(albumID)
-		if apiArt != "" && cleanArtistName(finalArtist) == "" { finalArtist = apiArt }
+		if apiArt != "" && finalArtist == "" { finalArtist = apiArt }
 		if apiDir != "" && albumDir == "" { albumDir = apiDir }
 	}
 	
@@ -1008,44 +1151,88 @@ func fetchAndCacheAlbum(albumID, albumName, artistName, knownDir string) AlbumDa
 		apiDir, apiArt := findAlbumDirViaSubsonicAPI(albumName, finalArtist)
 		if apiDir != "" {
 			albumDir = apiDir
-			if apiArt != "" && cleanArtistName(finalArtist) == "" { finalArtist = apiArt }
+			if apiArt != "" && finalArtist == "" { finalArtist = apiArt }
 		}
 	}
-	
+
 	if albumDir == "" {
 		guessDir, inferredArtist := guessAlbumPathAndArtist(albumName, finalArtist)
 		albumDir = guessDir
-		if cleanArtistName(finalArtist) == "" && inferredArtist != "" { finalArtist = inferredArtist }
+		if finalArtist == "" && inferredArtist != "" { finalArtist = inferredArtist }
 	}
 
 	if albumDir != "" {
-		if localData, found := getLocalAlbumData(albumDir); found { return localData }
+		if localData, found := getLocalAlbumData(albumDir); found { 
+			if getConfigBool("enable_write_cover_image", true) && localData.PicURL != "" { 
+				downloadImage(localData.PicURL, filepath.Join(albumDir, "cover.jpg")) 
+			}
+			if getConfigBool("enable_write_artist_image", true) && localData.ArtistPicURL != "" { 
+				downloadImage(localData.ArtistPicURL, filepath.Join(filepath.Dir(albumDir), "artist.jpg")) 
+			}
+			return localData 
+		}
 	}
 
 	cacheKey := fmt.Sprintf("qobuz_album_%s_%s", cleanSearchTerm(albumName), cleanSearchTerm(finalArtist))
+	
 	if data, ok, _ := host.KVStoreGet(cacheKey); ok {
 		var album AlbumData
-		if err := json.Unmarshal(data, &album); err == nil && album.AlbumID != "" { return album }
+		if err := json.Unmarshal(data, &album); err == nil && album.AlbumID != "" { 
+			if albumDir != "" {
+				if _, found := getLocalAlbumData(albumDir); !found {
+					saveLocalAlbumData(albumDir, album)
+				}
+				if getConfigBool("enable_write_cover_image", true) && album.PicURL != "" {
+					downloadImage(album.PicURL, filepath.Join(albumDir, "cover.jpg"))
+				}
+				if getConfigBool("enable_write_artist_image", true) && album.ArtistPicURL != "" {
+					downloadImage(album.ArtistPicURL, filepath.Join(filepath.Dir(albumDir), "artist.jpg"))
+				}
+			}
+			return album 
+		}
 	}
 
 	lockKey := "lock:" + cacheKey
 	if lockData, ok, _ := host.KVStoreGet(lockKey); ok {
 		var ts int64
 		fmt.Sscanf(string(lockData), "%d", &ts)
-		if time.Now().Unix()-ts < 10 { return AlbumData{} }
+		if time.Now().Unix()-ts < 15 { 
+			pdk.Log(pdk.LogInfo, fmt.Sprintf("[Phase1] ⏳ 检测到并发请求，正在等待数据缓存就绪: %s", albumName))
+			for i := 0; i < 15; i++ {
+				time.Sleep(1 * time.Second)
+				if data, ok, _ := host.KVStoreGet(cacheKey); ok {
+					var album AlbumData
+					if err := json.Unmarshal(data, &album); err == nil && album.AlbumID != "" { 
+						if albumDir != "" {
+							if _, found := getLocalAlbumData(albumDir); !found { saveLocalAlbumData(albumDir, album) }
+							if getConfigBool("enable_write_cover_image", true) && album.PicURL != "" { downloadImage(album.PicURL, filepath.Join(albumDir, "cover.jpg")) }
+							if getConfigBool("enable_write_artist_image", true) && album.ArtistPicURL != "" { downloadImage(album.ArtistPicURL, filepath.Join(filepath.Dir(albumDir), "artist.jpg")) }
+						}
+						return album 
+					}
+				}
+			}
+			return AlbumData{}
+		}
 	}
 	host.KVStoreSet(lockKey, []byte(fmt.Sprintf("%d", time.Now().Unix())))
 
 	pdk.Log(pdk.LogInfo, fmt.Sprintf("[Phase1] 🌐 本地无缓存，正在拉取 Qobuz API: 专辑[%s]", albumName))
 	fetchedData, err := fetchCompleteAlbumData(albumName, finalArtist)
 	
+	if (err != nil || fetchedData.AlbumID == "") && finalArtist != "" {
+		pdk.Log(pdk.LogInfo, fmt.Sprintf("[Phase1] ⚠️ 带歌手搜索失败，降级为【纯专辑名】模糊搜索: [%s]", albumName))
+		fetchedData, err = fetchCompleteAlbumData(albumName, "")
+	}
+	
 	if err == nil && fetchedData.AlbumID != "" {
 		if b, e := json.Marshal(fetchedData); e == nil { host.KVStoreSet(cacheKey, b) }
 		
 		if albumDir != "" {
 			saveLocalAlbumData(albumDir, fetchedData)
-			if getConfigBool("enable_write_cover_image", true) { downloadImage(fetchedData.PicURL, filepath.Join(albumDir, "cover.jpg")) }
-			if getConfigBool("enable_write_artist_image", true) { downloadImage(fetchedData.ArtistPicURL, filepath.Join(filepath.Dir(albumDir), "artist.jpg")) }
+			if getConfigBool("enable_write_cover_image", true) && fetchedData.PicURL != "" { downloadImage(fetchedData.PicURL, filepath.Join(albumDir, "cover.jpg")) }
+			if getConfigBool("enable_write_artist_image", true) && fetchedData.ArtistPicURL != "" { downloadImage(fetchedData.ArtistPicURL, filepath.Join(filepath.Dir(albumDir), "artist.jpg")) }
 			if getConfigBool("enable_write_pdf", true) && fetchedData.PDFLink != "" { downloadPDF(fetchedData.PDFLink, albumDir, fetchedData.PDFName) }
 			pdk.Log(pdk.LogInfo, "[Phase1] ✅ API 抓取完成，成功写入本地及下载附加资源")
 		} else {
@@ -1061,15 +1248,15 @@ func (a *qobuzAgent) GetAlbumInfo(input metadata.AlbumRequest) (*metadata.AlbumI
 	data := fetchAndCacheAlbum("", input.Name, input.Artist, "")
 
 	if data.AlbumID != "" {
-		desc := strings.ReplaceAll(data.Description, "\n", "<br>")
-		if data.PDFLink != "" {
-			urlStr := fmt.Sprintf("<a href=\"%s\" style=\"color: #EAB308; font-weight: bold;\" target=\"_blank\">点击下载 PDF Booklet</a>", data.PDFLink)
-			if desc != "" {
-				desc = urlStr + " " + desc
-			} else {
-				desc = urlStr
-			}
+		desc := data.Description
+		
+		rePDF := regexp.MustCompile(`PDF:(https?://[^\s<]+)\s*`)
+		if rePDF.MatchString(desc) {
+			desc = rePDF.ReplaceAllString(desc, `<a href="$1" style="color: #EAB308; font-weight: bold; text-decoration: underline;" target="_blank">点击下载 PDF </a>`)
 		}
+        
+		desc = strings.ReplaceAll(desc, "\n", "<br><br>")
+		
 		return &metadata.AlbumInfoResponse{Description: desc}, nil
 	}
 	return nil, nil
@@ -1094,9 +1281,36 @@ func (a *qobuzAgent) GetArtistBiography(input metadata.ArtistRequest) (*metadata
 	return nil, nil
 }
 
+func guessArtistPath(artistName string) string {
+	libraries, _ := host.LibraryGetAllLibraries()
+	cleanArtist := cleanArtistName(artistName)
+	if cleanArtist == "" { return "" }
+	for _, lib := range libraries {
+		root := lib.MountPoint
+		if root == "" { root = lib.Path }
+		if root == "" { continue }
+		guess := filepath.Join(root, cleanArtist)
+		if stat, err := os.Stat(guess); err == nil && stat.IsDir() { return guess }
+		if entries, err := os.ReadDir(root); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() && (fuzzyMatch(cleanArtist, entry.Name()) || strings.Contains(strings.ToLower(entry.Name()), strings.ToLower(cleanArtist))) {
+					return filepath.Join(root, entry.Name())
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func (a *qobuzAgent) GetArtistImages(input metadata.ArtistRequest) (*metadata.ArtistImagesResponse, error) {
 	_, img := getCachedArtistInfo(input.Name)
 	if img != "" {
+		if getConfigBool("enable_write_artist_image", true) {
+			artistDir := guessArtistPath(input.Name)
+			if artistDir != "" {
+				downloadImage(img, filepath.Join(artistDir, "artist.jpg"))
+			}
+		}
 		return &metadata.ArtistImagesResponse{Images: []metadata.ImageInfo{{URL: img, Size: 1200}}}, nil
 	}
 	return nil, nil
@@ -1111,14 +1325,14 @@ func (a *qobuzAgent) GetSimilarArtists(input metadata.SimilarArtistsRequest) (*m
 	sResp, err := host.HTTPSend(host.HTTPRequest{Method: "GET", URL: sUrl, Headers: buildQobuzHeaders(false)})
 	if err != nil || sResp.StatusCode != 200 { return nil, nil }
 
-	var sr struct { Artists struct { Items []struct { ID int `json:"id"` } `json:"items"` } `json:"artists"` }
+	var sr struct { Artists struct { Items []struct { ID interface{} `json:"id"` } `json:"items"` } `json:"artists"` }
 	json.Unmarshal(sResp.Body, &sr)
 	if len(sr.Artists.Items) == 0 { return nil, nil }
 
-	targetArtistID := sr.Artists.Items[0].ID
-	if targetArtistID == 0 { return nil, nil }
+	targetArtistID := fmt.Sprintf("%v", sr.Artists.Items[0].ID)
+	if targetArtistID == "0" || targetArtistID == "<nil>" || targetArtistID == "" { return nil, nil }
 
-	simUrl := fmt.Sprintf("%s/artist/getSimilarArtists?artist_id=%d&limit=20", qobuzBaseURL, targetArtistID)
+	simUrl := fmt.Sprintf("%s/artist/getSimilarArtists?artist_id=%s&limit=20", qobuzBaseURL, targetArtistID)
 	simUrl = appendRegion(simUrl, false)
 	simResp, err := host.HTTPSend(host.HTTPRequest{Method: "GET", URL: simUrl, Headers: buildQobuzHeaders(false)})
 	if err != nil || simResp.StatusCode != 200 { return nil, nil }
@@ -1126,8 +1340,8 @@ func (a *qobuzAgent) GetSimilarArtists(input metadata.SimilarArtistsRequest) (*m
 	var sim struct {
 		Artists struct {
 			Items []struct {
-				ID   int    `json:"id"`
-				Name string `json:"name"`
+				ID   interface{} `json:"id"`
+				Name string      `json:"name"`
 			} `json:"items"`
 		} `json:"artists"`
 	}
@@ -1137,7 +1351,7 @@ func (a *qobuzAgent) GetSimilarArtists(input metadata.SimilarArtistsRequest) (*m
 	for _, art := range sim.Artists.Items {
 		if art.Name != "" {
 			res = append(res, metadata.ArtistRef{
-				ID:   fmt.Sprintf("qobuz_art_%d", art.ID),
+				ID:   fmt.Sprintf("qobuz_art_%v", art.ID),
 				Name: art.Name,
 			})
 		}
@@ -1149,8 +1363,10 @@ func (a *qobuzAgent) GetSimilarArtists(input metadata.SimilarArtistsRequest) (*m
 
 func (a *qobuzAgent) GetLyrics(input lyrics.GetLyricsRequest) (lyrics.GetLyricsResponse, error) { 
 	if !getConfigBool("enable_lyrics", true) { return lyrics.GetLyricsResponse{}, nil }
+	
 	_, abs := getTrackArtistAndDir("admin", input.Track.ID, input.Track.Artist, input.Track.Path)
 	lyricText := fetchAndWriteLocalLyrics(input.Track.Title, input.Track.Artist, abs)
+	
 	if lyricText == "" { return lyrics.GetLyricsResponse{}, nil }
 	return lyrics.GetLyricsResponse{Lyrics: []lyrics.LyricsText{{Text: lyricText}}}, nil
 }
@@ -1190,6 +1406,13 @@ func runDiskWritePhase(absPath, title, finalArtist, originalAlbum string) {
 
 	if albumData.AlbumID == "" { return }
 
+	if getConfigBool("enable_write_cover_image", true) && albumData.PicURL != "" {
+		downloadImage(albumData.PicURL, filepath.Join(albumDir, "cover.jpg"))
+	}
+	if getConfigBool("enable_write_artist_image", true) && albumData.ArtistPicURL != "" {
+		downloadImage(albumData.ArtistPicURL, filepath.Join(filepath.Dir(albumDir), "artist.jpg"))
+	}
+
 	matchedSong, foundSong := matchLocalFileToSong(fileName, albumData.Songs)
 	if !foundSong { return }
 
@@ -1213,31 +1436,28 @@ func runDiskWritePhase(absPath, title, finalArtist, originalAlbum string) {
 		picData, _ = os.ReadFile(filepath.Join(albumDir, "cover.jpg"))
 	}
 
-	pureDesc := albumData.Description
-	finalComment := pureDesc
-	if albumData.PDFLink != "" {
-		pdfTag := "PDF:" + albumData.PDFLink
-		if finalComment != "" { finalComment = pdfTag + " " + finalComment } else { finalComment = pdfTag }
-	}
+	finalComment := albumData.Description
 
 	year := ""
 	if albumData.PublishTime > 0 { year = time.Unix(albumData.PublishTime/1000, 0).Format("2006") }
 
-	if writeTags(absPath, ext, matchedSong, albumData, year, finalComment, pureDesc, lyricText, picData) {
+	if writeTags(absPath, ext, matchedSong, albumData, year, finalComment, finalComment, lyricText, picData) {
 		markTrackProcessed(albumDir, fileName)
 	}
 }
 
 func (a *qobuzAgent) NowPlaying(req scrobbler.NowPlayingRequest) error {
-	updateValidUser(req.Username)
 	finalArtist, abs := getTrackArtistAndDir(req.Username, req.Track.ID, req.Track.Artist, req.Track.Path)
-	if abs != "" { runDiskWritePhase(abs, req.Track.Title, finalArtist, req.Track.Album) }
+	if abs != "" { 
+		runDiskWritePhase(abs, req.Track.Title, finalArtist, req.Track.Album) 
+	}
 	return nil
 }
 
 func (a *qobuzAgent) Scrobble(req scrobbler.ScrobbleRequest) error {
-	updateValidUser(req.Username)
 	finalArtist, abs := getTrackArtistAndDir(req.Username, req.Track.ID, req.Track.Artist, req.Track.Path)
-	if abs != "" { runDiskWritePhase(abs, req.Track.Title, finalArtist, req.Track.Album) }
+	if abs != "" { 
+		runDiskWritePhase(abs, req.Track.Title, finalArtist, req.Track.Album) 
+	}
 	return nil
 }
