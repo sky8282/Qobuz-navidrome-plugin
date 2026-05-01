@@ -61,7 +61,7 @@
         "lyrics_api_url": {
           "type": "string",
           "title": "歌词 API 请求格式请参考：https://github.com/sky8282/Netease-api ",
-          "default": "https://163.kimu.edu.kg"
+          "default": ""
         }
       }
     },
