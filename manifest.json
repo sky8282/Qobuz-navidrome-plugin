@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/navidrome/navidrome/refs/heads/master/plugins/manifest-schema.json",
   "name": "Qobuz Music Plugin",
   "author": "sky8282",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "获取 Qobuz 歌手头像、专辑封面、PDF、相似艺人, 同时支持通过自定义 API 请求歌词，支持写入本地",
   "website": "https://github.com/sky8282/Qobuz-navidrome-plugin",
   "permissions": {
