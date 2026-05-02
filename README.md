@@ -20,7 +20,9 @@
     * 增量写入本地音轨元数据
     * 专辑元数据             qobuz_metadata.json
     * 专辑曲目写入记录列表     qobuz_processed.txt
+* 🎼 古典乐 作品 写入曲目元数据供定制版 feishin 读取
 * ⚡ 内置缓存（KVStore），减少 API 请求
+ 
 
 ## 🧠 插件在以下时机触发：
 * ▶️ 播放歌曲（NowPlaying）
@@ -69,6 +71,10 @@ PLUGINS_CACHESIZE = "200MB"
     └── 曲目2
 ```
 <img width="1002" height="1420" alt="3" src="https://github.com/user-attachments/assets/7f44ad6c-cb09-458e-946a-1d180d8829a5" />
+
+##
+
+<img width="2324" height="2212" alt="1" src="https://github.com/user-attachments/assets/60a817ee-41c8-4035-8359-54208597c15f" />
 
 ## 🛠️ 网页里设置与启用插件：
 
