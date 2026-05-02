@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/navidrome/navidrome/refs/heads/master/plugins/manifest-schema.json",
   "name": "Qobuz Music Plugin",
   "author": "sky8282",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "获取 Qobuz 歌手头像、专辑封面、PDF、相似艺人, 同时支持通过自定义 API 请求歌词，支持写入本地",
   "website": "https://github.com/sky8282/Qobuz-navidrome-plugin",
   "permissions": {
@@ -19,7 +19,7 @@
         "163.kimu.edu.kg"
       ]
     },
-    "library": { "reason": "定位物理文件以写入标签", "filesystem": true },
+    "library": { "reason": "定位物理文件以写入标签。", "filesystem": true },
     "subsonicapi": { "reason": "通过内部接口提取真实路径" },
     "kvstore": { "reason": "缓存", "maxSize": "1048576" }
   },
@@ -27,6 +27,7 @@
     "schema": {
       "type": "object",
       "properties": {
+        "navidrome_user": { "type": "string", "title": "请输入你的 navidrome 用户名，解决烦人的后台警报日志", "default": "" },
         "qobuz_app_id": { "type": "string", "title": "Qobuz App ID", "default": "304027809" },
         "qobuz_app_secret": { "type": "string", "title": "Qobuz App Secret", "default": "abb21364945c0583309667d13ca3d93a" },
         "qobuz_region": {
@@ -50,7 +51,7 @@
           ]
         },
         "qobuz_token_main": { "type": "string", "title": "Qobuz 元数据语言主区域 Token", "default": "5qrINnLEIksG99IK_sJS72Bz61IndTlvNooB7KRg0tgpKSRJzSAJkPSw0VtretOLGXLqeMv0tPLE9-3Ls7oU5g" },
-        "qobuz_token_fr": { "type": "string", "title": "Qobuz 副 Token (不支持 PDF 的区域可通过 🇫🇷 法国 (FR) 获取 PDF)", "default": "" },
+        "qobuz_token_fr": { "type": "string", "title": "Qobuz 副 Token，不支持 PDF 的区域可通过 (🇫🇷 法国 FR)区域获取 PDF", "default": "" },
         "enable_debug_log": { "type": "boolean", "title": "开启 Debug 日志", "default": true },
         "enable_write_metadata": { "type": "boolean", "title": "增量写入本地音轨元数据", "default": true },
         "enable_write_pdf": { "type": "boolean", "title": "写入本地 PDF (.pdf)", "default": true },
@@ -68,6 +69,7 @@
     "uiSchema": {
       "type": "VerticalLayout",
       "elements": [
+        { "type": "Control", "scope": "#/properties/navidrome_user" },
         { "type": "Control", "scope": "#/properties/qobuz_app_id" },
         { "type": "Control", "scope": "#/properties/qobuz_app_secret" },
         { "type": "Control", "scope": "#/properties/qobuz_region" },
