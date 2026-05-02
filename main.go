@@ -47,7 +47,9 @@ func init() {
 	lyrics.Register(agent)
 	scrobbler.Register(agent)
 
-	pdk.Log(pdk.LogInfo, "🚀 模式: 动态鉴权 + Qobuz 元数据 (JSON 泛型容错版) + 歌词")
+	//pdk.Log(pdk.LogInfo, "===============================================")
+	pdk.Log(pdk.LogInfo, "💥 Qobuz Plugin Started 💥 ")
+	//pdk.Log(pdk.LogInfo, "===============================================")
 }
 
 func getConfigString(key, defaultVal string) string {
@@ -66,6 +68,7 @@ func getConfigBool(key string, defaultVal bool) bool {
 func getMainToken() string { return getConfigString("qobuz_token_main", "") }
 func getFrToken() string   { return getConfigString("qobuz_token_fr", "") }
 func getAppID() string     { return getConfigString("qobuz_app_id", "100000000") }
+func getNavidromeUser() string { return getConfigString("navidrome_user", "admin") }
 
 func getRegionCode(useFrToken bool) string {
 	if useFrToken { return "fr" }
@@ -123,6 +126,7 @@ type AlbumData struct {
 	ArtistBio    string     `json:"ArtistBio"`
 	Description  string     `json:"Description"`
 	Company      string     `json:"Company"`
+	PublishDate  string     `json:"PublishDate"`
 	PublishTime  int64      `json:"PublishTime"`
 	PDFLink      string     `json:"PDFLink"`
 	PDFName      string     `json:"PDFName"`
@@ -644,14 +648,15 @@ func getAlbumDetailByID(albumID string, data AlbumData, fallbackArtist string, u
 	}
 
 	var detail struct {
-		ID          interface{} `json:"id"`
-		Title       string `json:"title"`
-		Label       struct { Name string `json:"name"` } `json:"label"`
-		ReleasedAt  int64 `json:"released_at"`
-		Genre       struct { Name string `json:"name"` } `json:"genre"`
-		Image       struct { Large string `json:"large"` } `json:"image"`
-		Artist      struct { ID interface{} `json:"id"`; Name string `json:"name"` } `json:"artist"`
-		Tracks      struct {
+		ID                  interface{} `json:"id"`
+		Title               string `json:"title"`
+		Label               struct { Name string `json:"name"` } `json:"label"`
+		ReleasedAt          int64  `json:"released_at"`
+		ReleaseDateOriginal string `json:"release_date_original"`
+		Genre               struct { Name string `json:"name"` } `json:"genre"`
+		Image               struct { Large string `json:"large"` } `json:"image"`
+		Artist              struct { ID interface{} `json:"id"`; Name string `json:"name"` } `json:"artist"`
+		Tracks              struct {
 			Items []struct {
 				ID          interface{} `json:"id"`
 				Title       string `json:"title"`
@@ -676,6 +681,7 @@ func getAlbumDetailByID(albumID string, data AlbumData, fallbackArtist string, u
 		data.PicURL = detail.Image.Large
 		data.Company = detail.Label.Name
 		data.PublishTime = detail.ReleasedAt * 1000
+		data.PublishDate = detail.ReleaseDateOriginal
 
 		targetArtistName := detail.Artist.Name
 		if targetArtistName == "" && len(detail.Tracks.Items) > 0 { targetArtistName = detail.Tracks.Items[0].Performer.Name }
@@ -687,16 +693,17 @@ func getAlbumDetailByID(albumID string, data AlbumData, fallbackArtist string, u
 
 		for _, t := range detail.Tracks.Items {
 			work := t.Work
-			if work == "" { work = t.Title }
 			compName := t.Composer.Name
-			
-			compId := fmt.Sprintf("%v", t.Composer.ID)
-			workInfo := work
+			workInfo := ""
 
-			if compName != "" {
-				workInfo = fmt.Sprintf("%s (%s)", work, compName)
-				if compId != "0" && compId != "<nil>" && compId != "" { 
-					workInfo = fmt.Sprintf("%s [ID:qobuz_%s]", workInfo, compId) 
+			if work != "" {
+				workInfo = work
+				compId := fmt.Sprintf("%v", t.Composer.ID)
+				if compName != "" {
+					workInfo = fmt.Sprintf("%s (%s)", workInfo, compName)
+					if compId != "0" && compId != "<nil>" && compId != "" { 
+						workInfo = fmt.Sprintf("%s [ID:qobuz_%s]", workInfo, compId) 
+					}
 				}
 			}
 
@@ -711,7 +718,7 @@ func getAlbumDetailByID(albumID string, data AlbumData, fallbackArtist string, u
 				DiscNum:  t.MediaNumber,
 				ISRC:     t.ISRC,
 				Artists:  []string{performer},
-				Genre:    detail.Genre.Name,
+				Genre:    detail.Genre.Name, 
 				WorkInfo: workInfo,
 				Composer: compName,
 			})
@@ -760,7 +767,7 @@ func cleanFlacFile(absPath string) error {
 	return os.Rename(tempPath, absPath)
 }
 
-func writeTags(absPath, ext string, song SongData, album AlbumData, year, comment, description, lyric string, picData []byte) bool {
+func writeTags(absPath, ext string, song SongData, album AlbumData, publishDate, comment, description, lyric string, picData []byte) bool {
 	filename := filepath.Base(absPath)
 	artistStr := strings.Join(song.Artists, "/")
 
@@ -780,14 +787,22 @@ func writeTags(absPath, ext string, song SongData, album AlbumData, year, commen
 		changed := false
 		if tag.Artist() == "" && artistStr != "" { tag.SetArtist(artistStr); changed = true }
 		if tag.Album() == "" && album.AlbumName != "" { tag.SetAlbum(album.AlbumName); changed = true }
-		if tag.Year() == "" && year != "" { tag.SetYear(year); changed = true }
+		
+		if publishDate != "" && tag.Year() != publishDate { 
+			tag.SetYear(publishDate)
+			tag.DeleteFrames("TDRC") 
+			tag.AddTextFrame("TDRC", id3v2.EncodingUTF8, publishDate)
+			changed = true 
+		}
 
 		if len(tag.GetFrames("TRCK")) == 0 && song.TrackNum > 0 { tag.AddTextFrame("TRCK", id3v2.EncodingUTF8, fmt.Sprintf("%d", song.TrackNum)); changed = true }
 		if len(tag.GetFrames("TPOS")) == 0 && song.DiscNum > 0 { tag.AddTextFrame("TPOS", id3v2.EncodingUTF8, fmt.Sprintf("%d", song.DiscNum)); changed = true }
 		if len(tag.GetFrames("TPUB")) == 0 && album.Company != "" { tag.AddTextFrame("TPUB", id3v2.EncodingUTF8, album.Company); changed = true }
 		if len(tag.GetFrames("TSRC")) == 0 && song.ISRC != "" { tag.AddTextFrame("TSRC", id3v2.EncodingUTF8, song.ISRC); changed = true }
 		if len(tag.GetFrames("TCON")) == 0 && song.Genre != "" { tag.AddTextFrame("TCON", id3v2.EncodingUTF8, song.Genre); changed = true }
+		
 		if len(tag.GetFrames("TIT1")) == 0 && song.WorkInfo != "" { tag.AddTextFrame("TIT1", id3v2.EncodingUTF8, song.WorkInfo); changed = true }
+		
 		if len(tag.GetFrames("TCOM")) == 0 && song.Composer != "" { tag.AddTextFrame("TCOM", id3v2.EncodingUTF8, song.Composer); changed = true }
 
 		hasComm := false
@@ -838,7 +853,22 @@ func writeTags(absPath, ext string, song SongData, album AlbumData, year, commen
 			changed = true
 		}
 		if getFlacLen("ALBUM") == 0 && album.AlbumName != "" { cmt.Add("ALBUM", album.AlbumName); changed = true }
-		if getFlacLen("DATE") == 0 && year != "" { cmt.Add("DATE", year); changed = true }
+		
+		if publishDate != "" {
+			d, err := cmt.Get("DATE")
+			if err != nil || len(d) == 0 || d[0] != publishDate {
+				var newComments []string
+				for _, c := range cmt.Comments {
+					if !strings.HasPrefix(strings.ToUpper(c), "DATE=") {
+						newComments = append(newComments, c)
+					}
+				}
+				cmt.Comments = newComments
+				cmt.Add("DATE", publishDate)
+				changed = true
+			}
+		}
+
 		if getFlacLen("TRACKNUMBER") == 0 && song.TrackNum > 0 { cmt.Add("TRACKNUMBER", fmt.Sprintf("%d", song.TrackNum)); changed = true }
 		if getFlacLen("DISCNUMBER") == 0 && song.DiscNum > 0 { cmt.Add("DISCNUMBER", fmt.Sprintf("%d", song.DiscNum)); changed = true }
 		if getFlacLen("ORGANIZATION") == 0 && getFlacLen("LABEL") == 0 && album.Company != "" {
@@ -853,6 +883,7 @@ func writeTags(absPath, ext string, song SongData, album AlbumData, year, commen
 		
 		if getFlacLen("WORK") == 0 && song.WorkInfo != "" { cmt.Add("WORK", song.WorkInfo); changed = true }
 		if getFlacLen("GROUPING") == 0 && song.WorkInfo != "" { cmt.Add("GROUPING", song.WorkInfo); changed = true }
+		
 		if getFlacLen("COMPOSER") == 0 && song.Composer != "" { cmt.Add("COMPOSER", song.Composer); changed = true }
 
 		hasPic := false
@@ -890,14 +921,21 @@ func writeTags(absPath, ext string, song SongData, album AlbumData, year, commen
 		if tags.Artist == "" && artistStr != "" { tags.Artist = artistStr; changed = true }
 		if tags.AlbumArtist == "" && artistStr != "" { tags.AlbumArtist = artistStr; changed = true }
 		if tags.Album == "" && album.AlbumName != "" { tags.Album = album.AlbumName; changed = true }
-		if tags.Date == "" && year != "" { tags.Date = year; changed = true }
+		
+		if publishDate != "" && tags.Date != publishDate { 
+			tags.Date = publishDate
+			changed = true 
+		}
+
 		if tags.TrackNumber == 0 && song.TrackNum > 0 { tags.TrackNumber = int16(song.TrackNum); changed = true }
 		if tags.DiscNumber == 0 && song.DiscNum > 0 { tags.DiscNumber = int16(song.DiscNum); changed = true }
 		if tags.CustomGenre == "" && song.Genre != "" { tags.CustomGenre = song.Genre; changed = true }
 		
 		if tags.Custom == nil { tags.Custom = make(map[string]string) }
+		
 		if _, exists := tags.Custom["grouping"]; !exists && song.WorkInfo != "" { tags.Custom["grouping"] = song.WorkInfo; changed = true }
 		if _, exists := tags.Custom["©grp"]; !exists && song.WorkInfo != "" { tags.Custom["©grp"] = song.WorkInfo; changed = true }
+		
 		if tags.Composer == "" && song.Composer != "" { tags.Composer = song.Composer; changed = true }
 		if _, exists := tags.Custom["label"]; !exists && album.Company != "" { tags.Custom["label"] = album.Company; changed = true }
 		if _, exists := tags.Custom["ISRC"]; !exists && song.ISRC != "" { tags.Custom["ISRC"] = song.ISRC; changed = true }
@@ -995,7 +1033,7 @@ func resolveFromRelativePath(relPath string) string {
 
 func getAlbumDirAndArtistFromID(albumID string) (string, string) {
 	if albumID == "" { return "", "" }
-	jsonStr, err := host.SubsonicAPICall("getAlbum?id=" + albumID + "&u=admin&f=json&v=1.16.0")
+	jsonStr, err := host.SubsonicAPICall("getAlbum?id=" + albumID + "&u=" + getNavidromeUser() + "&f=json&v=1.16.0")
 	if err != nil { return "", "" }
 	var resp subsonicAlbumResponse
 	json.Unmarshal([]byte(jsonStr), &resp)
@@ -1018,7 +1056,7 @@ func getAlbumDirAndArtistFromID(albumID string) (string, string) {
 func findAlbumDirViaSubsonicAPI(albumName, artistName string) (string, string) {
 	if albumName == "" { return "", "" }
 	query := url.QueryEscape(albumName)
-	jsonStr, err := host.SubsonicAPICall(fmt.Sprintf("search3?query=%s&albumCount=10&u=admin&f=json&v=1.16.0", query))
+	jsonStr, err := host.SubsonicAPICall(fmt.Sprintf("search3?query=%s&albumCount=10&u=%s&f=json&v=1.16.0", query, getNavidromeUser()))
 	if err != nil { return "", "" }
 
 	var resp struct {
@@ -1095,7 +1133,7 @@ func guessAlbumPathAndArtist(albumName, artistName string) (string, string) {
 }
 
 func getSongDetailsFromSubsonic(username, trackID string) (*subsonicSongResponse, error) {
-	if username == "" { username = "admin" }
+	if username == "" { username = getNavidromeUser() }
 	jsonStr, err := host.SubsonicAPICall("getSong?id=" + trackID + "&u=" + username + "&f=json&v=1.16.0")
 	if err != nil { return nil, err }
 	var resp subsonicSongResponse
@@ -1248,14 +1286,12 @@ func (a *qobuzAgent) GetAlbumInfo(input metadata.AlbumRequest) (*metadata.AlbumI
 	data := fetchAndCacheAlbum("", input.Name, input.Artist, "")
 
 	if data.AlbumID != "" {
-		desc := data.Description
+		desc := strings.ReplaceAll(data.Description, "\n", "<br><br>")
 		
-		rePDF := regexp.MustCompile(`PDF:(https?://[^\s<]+)\s*`)
+		rePDF := regexp.MustCompile(`PDF:(https?://[^\s<]+)`)
 		if rePDF.MatchString(desc) {
 			desc = rePDF.ReplaceAllString(desc, `<a href="$1" style="color: #EAB308; font-weight: bold; text-decoration: underline;" target="_blank">点击下载 PDF </a>`)
 		}
-        
-		desc = strings.ReplaceAll(desc, "\n", "<br><br>")
 		
 		return &metadata.AlbumInfoResponse{Description: desc}, nil
 	}
@@ -1438,13 +1474,25 @@ func runDiskWritePhase(absPath, title, finalArtist, originalAlbum string) {
 
 	finalComment := albumData.Description
 
-	year := ""
-	if albumData.PublishTime > 0 { year = time.Unix(albumData.PublishTime/1000, 0).Format("2006") }
+	publishDate := ""
+	if albumData.PublishDate != "" {
+		if !strings.Contains(albumData.PublishDate, "T") {
+			publishDate = albumData.PublishDate + "T00:00:00Z"
+		} else {
+			publishDate = albumData.PublishDate
+		}
+	} else if albumData.PublishTime > 0 {
+		publishDate = time.Unix(albumData.PublishTime/1000, 0).UTC().Format("2006-01-02") + "T00:00:00Z"
+	}
 
-	if writeTags(absPath, ext, matchedSong, albumData, year, finalComment, finalComment, lyricText, picData) {
+	if writeTags(absPath, ext, matchedSong, albumData, publishDate, finalComment, finalComment, lyricText, picData) {
 		markTrackProcessed(albumDir, fileName)
 	}
 }
+
+
+
+
 
 func (a *qobuzAgent) NowPlaying(req scrobbler.NowPlayingRequest) error {
 	finalArtist, abs := getTrackArtistAndDir(req.Username, req.Track.ID, req.Track.Artist, req.Track.Path)
