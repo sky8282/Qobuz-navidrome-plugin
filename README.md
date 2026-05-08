@@ -20,7 +20,7 @@
     * 增量写入本地音轨元数据   ⚠️ 慎用 ⚠️
     * 专辑元数据             qobuz_metadata.json
     * 专辑曲目写入记录列表     qobuz_processed.txt
-* 🎼 🎼 古典乐 作品 写入曲目元数据供定制版 feishin 读取 （ 请从 Releases 下载定制版 feishin ）
+* 🎼 古典乐 作品 写入曲目元数据供定制版 feishin 读取 （ 请从 Releases 下载定制版 feishin ）
 * ⚡ 内置缓存（KVStore），减少 API 请求
  
 ## 🧠 插件在以下时机触发：
@@ -56,6 +56,8 @@ PLUGINS_FOLDER = "./plugins"
 PLUGINS_AUTORELOAD = true
 PLUGINS_LOGLEVEL = "INFO"
 PLUGINS_CACHESIZE = "200MB"
+AUTOIMPORTPLAYLISTS = true
+ARTISTARTPRIORITY = "album/artist.*,artist.*,external"   #开启使用插件显示歌手头像
 ```
 ## 📖 歌手头像 / 专辑封面 / 歌词 / PDF 保存路径格式:
 ```text
