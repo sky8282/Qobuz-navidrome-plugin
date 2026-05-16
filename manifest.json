@@ -2,8 +2,8 @@
   "$schema": "https://raw.githubusercontent.com/navidrome/navidrome/refs/heads/master/plugins/manifest-schema.json",
   "name": "Qobuz Music Plugin",
   "author": "sky8282",
-  "version": "0.0.5",
-  "description": "获取 Qobuz 歌手头像、专辑封面、PDF、相似艺人、单曲与歌手电台，支持自定义歌词与写入本地",
+  "version": "0.0.6",
+  "description": "获取 Qobuz 歌手头像、专辑封面、PDF、相似艺人、单曲与歌手电台，支持自定义歌词与写入本地 (WASM 高并发排队版)",
   "website": "https://github.com/sky8282/Qobuz-navidrome-plugin",
   "permissions": {
     "users": { "reason": "开启写入本地权限" },
@@ -20,13 +20,23 @@
       ]
     },
     "library": { "reason": "定位物理文件以写入标签。", "filesystem": true },
-    "subsonicapi": { "reason": "通过内部接口提取真实路径" },
+    "subsonicapi": { "reason": "通过内部接口提取真实路径。" },
     "kvstore": { "reason": "缓存", "maxSize": "1048576" }
   },
   "config": {
     "schema": {
       "type": "object",
       "properties": {
+        "max_workers": {
+          "type": "integer",
+          "title": "后台并发刮削线程数 ( 过高将触发 api 限制 )",
+          "default": 1
+        },
+        "queue_size": {
+          "type": "integer",
+          "title": "排队队列最大容量 ( 超出将放弃当次请求，等待下次触发 )",
+          "default": 50
+        },
         "navidrome_user": { "type": "string", "title": "Navidrome 用户名 (解决权限问题)", "default": "" },
         "qobuz_app_id": { "type": "string", "title": "Qobuz App ID", "default": "304027809" },
         "qobuz_app_secret": { "type": "string", "title": "Qobuz App Secret", "default": "abb21364945c0583309667d13ca3d93a" },
@@ -58,7 +68,7 @@
         "enable_write_pdf": { "type": "boolean", "title": "写入本地 PDF 文件 (.pdf)", "default": false },
         "enable_write_cover_image": { "type": "boolean", "title": "写入本地专辑封面 (cover.jpg)", "default": false },
         "enable_write_artist_image": { "type": "boolean", "title": "写入本地歌手头像 (artist.jpg)", "default": false },
-        "enable_write_global_artist_image": { "type": "boolean", "title": "写入全局歌手头像 (媒体库根目录/artist/.jpg)", "default": true },
+        "enable_write_global_artist_image": { "type": "boolean", "title": "写入全局歌手头像 (媒体库根目录/artist/.jpg)", "default": false },
         "enable_write_metadata": { "type": "boolean", "title": "写入专辑元数据 (qobuz_metadata.json)", "default": false },
         "enable_write_processed": { "type": "boolean", "title": "记录已处理曲目 (qobuz_processed.txt)", "default": false },
         "enable_lyrics": { "type": "boolean", "title": "向播放器发出的请求提供歌词", "default": false },
@@ -69,6 +79,14 @@
     "uiSchema": {
       "type": "VerticalLayout",
       "elements": [
+        {
+          "type": "Group",
+          "label": "🛡️ 性能与并发控制",
+          "elements": [
+            { "type": "Control", "scope": "#/properties/max_workers" },
+            { "type": "Control", "scope": "#/properties/queue_size" }
+          ]
+        },
         {
           "type": "Group",
           "label": "🔑 核心鉴权配置",
@@ -96,7 +114,7 @@
             { "type": "Control", "scope": "#/properties/enable_write_processed" },
             { "type": "Control", "scope": "#/properties/enable_lyrics" },
             { "type": "Control", "scope": "#/properties/lyrics_api_url" },
-             { "type": "Control", "scope": "#/properties/cache_days" }
+            { "type": "Control", "scope": "#/properties/cache_days" }
           ]
         }
       ]
