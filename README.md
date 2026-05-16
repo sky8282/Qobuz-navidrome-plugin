@@ -44,7 +44,7 @@
 ## 🛠️ 或者自行编译：
 1. 安装依赖
 ```text
-go mod init qobuz-plugin&&go mod tidy
+go mod init qobuz-plugin && go mod tidy
 ```
 2. 编译 wasm 如报警自行安装所需的工具:
 ```text
