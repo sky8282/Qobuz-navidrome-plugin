@@ -23,6 +23,11 @@
 * 🎼 古典乐 作品 写入曲目元数据供定制版 feishin 读取 （ 请从 Releases 下载定制版 feishin ）
 * ⚡ 内置缓存（KVStore），减少 API 请求
 * ▶️ 艺人电台 和 相似歌曲 推荐
+* ⚡ 内置缓存（ KVStore - DAO 存储 ）减少 API 请求
+* ⌛ 分布式分布式叫号排队系统，
+    * 分布式并发槽位 ( Distributed Semaphore )，特别是 navidrome 全局风暴扫描时
+    * 写后二次确认 ( Double-Check Locking )
+    * 退让抖动休眠 ( Jitter Sleep ) 
  
 ## 🧠 插件在以下时机触发：
 * ⚠️ 刮削对象没有被 navidrome 缓存
